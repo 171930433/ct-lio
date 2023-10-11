@@ -213,9 +213,10 @@ int main(int argc, char **argv)
 
     );
 
-    lio->setFunc(cloud_pub_func);
-    lio->setFunc(pose_pub_func);
-    lio->setFunc(data_pub_func);
+    // 注册3个pub回调
+    lio->setFunc(cloud_pub_func); //? scan ??
+    lio->setFunc(pose_pub_func);  // pose
+    lio->setFunc(data_pub_func);  // 速度与行驶距离
 
     convert = new zjloc::CloudConvert;
     convert->LoadFromYAML(config_file);
@@ -225,6 +226,7 @@ int main(int argc, char **argv)
     std::string laser_topic = yaml["common"]["lid_topic"].as<std::string>();
     std::string imu_topic = yaml["common"]["imu_topic"].as<std::string>();
 
+    // sub 端直接给lio塞数据，并不是显示的调用 lio->processData()
     ros::Subscriber subLaserCloud = convert->lidar_type_ == zjloc::CloudConvert::LidarType::AVIA
                                         ? nh.subscribe(laser_topic, 100, livox_pcl_cbk)
                                         : nh.subscribe<sensor_msgs::PointCloud2>(laser_topic, 100, standard_pcl_cbk);
@@ -233,6 +235,7 @@ int main(int argc, char **argv)
 
     ros::Subscriber sub_type = nh.subscribe<std_msgs::Int32>("/change_status", 2, updateStatus);
 
+    // 大概率是run里面轮询+条件变量等待
     std::thread measurement_process(&zjloc::lidarodom::run, lio);
 
     ros::spin();

@@ -69,8 +69,8 @@ namespace zjloc
 
           state *p_state;
 
-          std::vector<point3D> point_surf; //  global frame
-          std::vector<point3D> const_surf; //  lidar frame
+          std::vector<point3D> point_surf; //  global frame， 经过运动补偿，还有alpha的"补偿"
+          std::vector<point3D> const_surf; //  lidar frame， 未经过运动补偿
 
           std::vector<point3D> surf_keypoints;
 

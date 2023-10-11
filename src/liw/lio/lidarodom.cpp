@@ -169,6 +169,8 @@ namespace zjloc
           {
                std::vector<MeasureGroup> measurements;
                std::unique_lock<std::mutex> lk(mtx_buf);
+               // 等待到组包成功，每次来数据了尝试一次组包
+               // 组包数据为： 单帧激光， 该帧激光扫描的起止时间内imu
                cond.wait(lk, [&]
                          { return (measurements = getMeasureMents()).size() != 0; });
                lk.unlock();
@@ -214,19 +216,23 @@ namespace zjloc
                     << index_frame << ANSI_COLOR_RESET << std::endl;
           imu_states_.clear(); //   need clear here
 
-          // 利用IMU数据进行状态预测
+          // 利用IMU数据进行状态预测, 计算激光帧内所有的imu预测结果
           zjloc::common::Timer::Evaluate([&]()
                                          { Predict(); },
                                          "predict");
-          //
+          // 获得当前帧激光的起始pose
+          // ! start_pose 初值为上一次计算的计算
+          // ! end_pose 为根据eskf的结果，根据imu预测的结果
           zjloc::common::Timer::Evaluate([&]()
                                          { stateInitialization(); },
                                          "state init");
 
+          // copy 当前帧激光的所有点 至const_surf
           std::vector<point3D> const_surf;
           const_surf.insert(const_surf.end(), meas.lidar_.begin(), meas.lidar_.end());
           // const_surf.assign(meas.lidar_.begin(), meas.lidar_.end());
 
+          //! 构建p_frame 数据帧，将局部点点，经过运动补偿，alpha补偿，转换到world系
           cloudFrame *p_frame;
           zjloc::common::Timer::Evaluate([&]()
                                          { p_frame = buildFrame(const_surf, current_state,
@@ -285,6 +291,8 @@ namespace zjloc
      void lidarodom::poseEstimation(cloudFrame *p_frame)
      {
           //   TODO: check current_state data
+          // index_frame 初值为1，即首帧不优化
+          // 
           if (index_frame > 1)
           {
                zjloc::common::Timer::Evaluate([&]()
@@ -295,11 +303,15 @@ namespace zjloc
           bool add_points = true;
           if (add_points)
           { //   update map here
+          // ! voxel_map 点间距最小 ：min_distance_points 5cm
+          // 每个voxel中最多20个点
+          // 每个voxel是20cm的立方体
                zjloc::common::Timer::Evaluate([&]()
                                               { map_incremental(p_frame); },
                                               "map update");
           }
 
+          // !500 米以外的点删除 max_distance = 500
           zjloc::common::Timer::Evaluate([&]()
                                          { lasermap_fov_segment(); },
                                          "fov segment");
@@ -848,6 +860,7 @@ namespace zjloc
 
                if (!voxel_block.IsFull())
                {
+                    //! 没有与当前点很近的点就插入
                     double sq_dist_min_to_points = 10 * voxel_size * voxel_size;
                     for (int i(0); i < voxel_block.NumPoints(); ++i)
                     {
@@ -877,6 +890,7 @@ namespace zjloc
                     map[voxel(kx, ky, kz)] = std::move(block);
                }
           }
+          // 插入总的points_world中
           addPointToPcl(points_world, point, intensity, p_frame);
      }
 
@@ -903,6 +917,7 @@ namespace zjloc
           }
 
           {
+               // 发布所有点
                std::string laser_topic = "laser";
                pub_cloud_to_ros(laser_topic, points_world, p_frame->time_frame_end);
           }
@@ -914,6 +929,8 @@ namespace zjloc
           //   use predict pose here
           Eigen::Vector3d location = current_state->translation;
           std::vector<voxel> voxels_to_erase;
+          // 根据voxelBlock中的第一个点，max_distance = 500
+          // 与当前位置大于500米即删除
           for (auto &pair : voxel_map)
           {
                Eigen::Vector3d pt = pair.second.points[0];
@@ -939,14 +956,18 @@ namespace zjloc
                }
           }
 
+          // 每个点匀速模型去畸变, 折算至点云结束时刻
           if (options_.motion_compensation == CONSTANT_VELOCITY)
                Undistort(frame_surf);
 
+          // 所有的点pose根据alpha_time 旋转至world系
           for (auto &point_temp : frame_surf)
                transformPoint(options_.motion_compensation, point_temp, cur_state->rotation_begin,
                               cur_state->rotation, cur_state->translation_begin, cur_state->translation,
                               R_imu_lidar, t_imu_lidar);
 
+          // const_surf: 原始未经过运动补偿的点云
+          // frame_surf: world系下的经过运动补偿的点
           cloudFrame *p_frame = new cloudFrame(frame_surf, const_surf, cur_state);
 
           p_frame->time_frame_begin = timestamp_begin;
@@ -970,12 +991,13 @@ namespace zjloc
           }
           else
           {
-               //   use last pose
+               //   !use last pose， 上一帧的结果作为当前帧的初值
                current_state->rotation_begin = all_state_frame[all_state_frame.size() - 1]->rotation;
                current_state->translation_begin = all_state_frame[all_state_frame.size() - 1]->translation;
                // current_state->rotation_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->rotation;
                // current_state->translation_begin = all_cloud_frame[all_cloud_frame.size() - 1]->p_state->translation;
                //   use imu predict
+               // ! 当前帧激光的结束时刻使用imu的预测解
                current_state->rotation = Eigen::Quaterniond(imu_states_.back().R_.matrix());
                current_state->translation = imu_states_.back().p_;
                // current_state->rotation = q_next_end;
@@ -1076,10 +1098,8 @@ namespace zjloc
 
                // 根据pt.time查找时间，pt.time是该点打到的时间与雷达开始时间之差，单位为毫秒
                math::PoseInterp<NavStated>(
-                   pt.timestamp, imu_states_, [](const NavStated &s)
-                   { return s.timestamp_; },
-                   [](const NavStated &s)
-                   { return s.GetSE3(); },
+                   pt.timestamp, imu_states_, [](const NavStated &s) { return s.timestamp_; },
+                   [](const NavStated &s)  { return s.GetSE3(); },
                    Ti, match);
 
                pt.raw_point = TIL_.inverse() * T_end.inverse() * Ti * TIL_ * pt.raw_point;

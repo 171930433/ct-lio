@@ -299,6 +299,7 @@ namespace zjloc
 
             double range = pl_orig.points[i].x * pl_orig.points[i].x + pl_orig.points[i].y * pl_orig.points[i].y +
                            pl_orig.points[i].z * pl_orig.points[i].z;
+            // !去除过远点和盲区
             if (range > 150 * 150 || range < blind * blind)
                 continue;
 
