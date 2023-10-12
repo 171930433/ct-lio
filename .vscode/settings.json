@@ -1,5 +1,11 @@
 {
     "files.associations": {
-        "stop_token": "cpp"
+        "stop_token": "cpp",
+        "deque": "cpp",
+        "string": "cpp",
+        "vector": "cpp",
+        "array": "cpp",
+        "tuple": "cpp",
+        "utility": "cpp"
     }
 }

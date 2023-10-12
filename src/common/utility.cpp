@@ -56,14 +56,17 @@ void subSampleFrame(std::vector<point3D> &frame, double size_voxel)
 void gridSampling(const std::vector<point3D> &frame, std::vector<point3D> &keypoints, double size_voxel_subsampling)
 {
      keypoints.resize(0);
+     // copy frame to frame_sub
      std::vector<point3D> frame_sub;
      frame_sub.resize(frame.size());
      for (int i = 0; i < (int)frame_sub.size(); i++)
      {
           frame_sub[i] = frame[i];
      }
+     // 下采样
      subSampleFrame(frame_sub, size_voxel_subsampling);
      keypoints.reserve(frame_sub.size());
+     //! keypoints 取每个voxel里面的第一个点作为keypoint
      for (int i = 0; i < (int)frame_sub.size(); i++)
      {
           keypoints.push_back(frame_sub[i]);

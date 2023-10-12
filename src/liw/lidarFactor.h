@@ -399,16 +399,18 @@ namespace CT_ICP
           template <typename T>
           bool operator()(const T *const trans_params, const T *const rot_params, T *residual) const
           {
-               Eigen::Map<Eigen::Quaternion<T>> quat(const_cast<T *>(rot_params));
-               Eigen::Matrix<T, 3, 1> target_temp(T(target_(0, 0)), T(target_(1, 0)), T(target_(2, 0)));
-               Eigen::Matrix<T, 3, 1> transformed = quat * target_temp;
+               Eigen::Map<Eigen::Quaternion<T>> quat(const_cast<T *>(rot_params));   // q_wi
+               Eigen::Matrix<T, 3, 1> target_temp(T(target_(0, 0)), T(target_(1, 0)), T(target_(2, 0))); // imu 到 关键点在 imu系投影, pt_imu
+               Eigen::Matrix<T, 3, 1> transformed = quat * target_temp;    // imu 到 关键点在 global系投影
                transformed(0, 0) += trans_params[0];
                transformed(1, 0) += trans_params[1];
-               transformed(2, 0) += trans_params[2];
+               transformed(2, 0) += trans_params[2];   // 关键点在global位置 pt_global
 
-               Eigen::Matrix<T, 3, 1> reference_temp(T(reference_(0, 0)), T(reference_(1, 0)), T(reference_(2, 0)));
+               // global 最近点
+               Eigen::Matrix<T, 3, 1> reference_temp(T(reference_(0, 0)), T(reference_(1, 0)), T(reference_(2, 0)));    
+               // global 法向量
                Eigen::Matrix<T, 3, 1> reference_normal_temp(T(reference_normal_(0, 0)), T(reference_normal_(1, 0)), T(reference_normal_(2, 0)));
-
+               // 点到平面的距离
                residual[0] = T(weight_) * (transformed - reference_temp).transpose() * reference_normal_temp;
                return true;
           }

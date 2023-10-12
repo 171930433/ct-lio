@@ -250,6 +250,7 @@ namespace zjloc
           // std::cout << "obs: " << current_state->translation.transpose() << ", " << current_state->rotation.transpose() << std::endl;
           // SE3 pred_pose = eskf_.GetNominalSE3();
           // std::cout << "pred: " << pred_pose.translation().transpose() << ", " << pred_pose.so3().log().transpose() << std::endl;
+          // !使用pose_of_lo_进行量测更新
           zjloc::common::Timer::Evaluate([&]()
                                          { eskf_.ObserveSE3(pose_of_lo_, 1e-2, 1e-2); },
                                          "eskf_obs");
@@ -319,12 +320,13 @@ namespace zjloc
 
      void lidarodom::optimize(cloudFrame *p_frame)
      {
-
+          // 上一帧点云对应状态
           state *previous_state = nullptr;
           Eigen::Vector3d previous_translation = Eigen::Vector3d::Zero();
           Eigen::Vector3d previous_velocity = Eigen::Vector3d::Zero();
           Eigen::Quaterniond previous_orientation = Eigen::Quaterniond::Identity();
 
+          // 当前帧点云对应的预测解，使用imu推算获得
           state *curr_state = p_frame->p_state;
           Eigen::Quaterniond begin_quat = Eigen::Quaterniond(curr_state->rotation_begin);
           Eigen::Quaterniond end_quat = Eigen::Quaterniond(curr_state->rotation);
@@ -348,12 +350,16 @@ namespace zjloc
                          << "\ncurr end: " << p_frame->p_state->translation.transpose() << std::endl;
           }
 
+          // sampling_rate : 1
+          // surf_res: 0.2
+          // surf_keypoints 每0.2的立方体格子去一个点作为keypoints
           std::vector<point3D> surf_keypoints;
           gridSampling(p_frame->point_surf, surf_keypoints,
                        options_.sampling_rate * options_.surf_res);
 
           size_t num_size = p_frame->point_surf.size();
 
+          //! 将world系下的点，转换到当前帧点云的结尾时刻
           auto transformKeypoints = [&](std::vector<point3D> &point_frame)
           {
                Eigen::Matrix3d R;
@@ -544,6 +550,8 @@ namespace zjloc
                     current_state->rotation = end_quat;
                }
 
+               // thres_orientation_norm : 0.1 °
+               // thres_translation_norm : 0.01 m
                if (diff_rot < options_.thres_orientation_norm &&
                    diff_trans < options_.thres_translation_norm)
                {
@@ -560,7 +568,7 @@ namespace zjloc
           }
 
           //   transpose point before added
-          transformKeypoints(p_frame->point_surf);
+          transformKeypoints(p_frame->point_surf);     // 根据新的
      }
 
      double lidarodom::checkLocalizability(std::vector<Eigen::Vector3d> planeNormals)
@@ -602,7 +610,7 @@ namespace zjloc
           }
 
           barycenter /= (double)points.size();
-          neighborhood.center = barycenter;
+          neighborhood.center = barycenter;  // 重心
 
           Eigen::Matrix3d covariance_Matrix(Eigen::Matrix3d::Zero());
           for (auto &point : points)
@@ -616,6 +624,7 @@ namespace zjloc
           covariance_Matrix(2, 0) = covariance_Matrix(0, 2);
           covariance_Matrix(2, 1) = covariance_Matrix(1, 2);
           neighborhood.covariance = covariance_Matrix;
+          // eigenvectors 从小到大排列，如果是平面，则最小特征值对应的特征向量为法向量
           Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(covariance_Matrix);
           Eigen::Vector3d normal(es.eigenvectors().col(0).normalized());
           neighborhood.normal = normal;
@@ -641,8 +650,9 @@ namespace zjloc
                                                Eigen::Vector3d &location, double &planarity_weight)
           {
                auto neighborhood = computeNeighborhoodDistribution(vector_neighbors);
-               planarity_weight = std::pow(neighborhood.a2D, options_.power_planarity);
+               planarity_weight = std::pow(neighborhood.a2D, options_.power_planarity);   // options_.power_planarity  : 2
 
+               // ? 调整法向量的上下 location是imu系下的激光点位置，是不是错了
                if (neighborhood.normal.dot(p_frame->p_state->translation_begin - location) < 0)
                {
                     neighborhood.normal = -1.0 * neighborhood.normal;
@@ -650,21 +660,21 @@ namespace zjloc
                return neighborhood;
           };
 
-          double lambda_weight = std::abs(options_.weight_alpha);
-          double lambda_neighborhood = std::abs(options_.weight_neighborhood);
-          const double kMaxPointToPlane = options_.max_dist_to_plane_icp;
+          double lambda_weight = std::abs(options_.weight_alpha);     // 0.9
+          double lambda_neighborhood = std::abs(options_.weight_neighborhood);  // 0.1
+          const double kMaxPointToPlane = options_.max_dist_to_plane_icp;  // 0.3
           const double sum = lambda_weight + lambda_neighborhood;
 
           lambda_weight /= sum;
           lambda_neighborhood /= sum;
 
-          const short nb_voxels_visited = p_frame->frame_id < options_.init_num_frames
+          const short nb_voxels_visited = p_frame->frame_id < options_.init_num_frames    // init_num_frames: 20
                                               ? 2
-                                              : options_.voxel_neighborhood;
+                                              : options_.voxel_neighborhood;    // voxel_neighborhood : 1
 
           const int kThresholdCapacity = p_frame->frame_id < options_.init_num_frames
                                              ? 1
-                                             : options_.threshold_voxel_occupancy;
+                                             : options_.threshold_voxel_occupancy;   // threshold_voxel_occupancy : 1
 
           size_t num = keypoints.size();
           int num_residuals = 0;
@@ -675,16 +685,19 @@ namespace zjloc
                auto &raw_point = keypoint.raw_point;
 
                std::vector<voxel> voxels;
+               // * 初始化搜索最邻近12位置，初始化完成后搜索6位置
+               //! vector_neighbors: 与keypoint 最邻近的最大20个点
+               //! voxels 上述最多20个点所在的voxel
                auto vector_neighbors = searchNeighbors(voxel_map, keypoint.point,
                                                        nb_voxels_visited,
-                                                       options_.size_voxel_map,
-                                                       options_.max_number_neighbors,
+                                                       options_.size_voxel_map, // 0.2
+                                                       options_.max_number_neighbors,     // 20
                                                        kThresholdCapacity,
-                                                       options_.estimate_normal_from_neighborhood
+                                                       options_.estimate_normal_from_neighborhood   // true
                                                            ? nullptr
                                                            : &voxels);
 
-               if (vector_neighbors.size() < options_.min_number_neighbors)
+               if (vector_neighbors.size() < options_.min_number_neighbors)     // min_number_neighbors: 20
                     continue;
 
                double weight;
@@ -693,19 +706,23 @@ namespace zjloc
 
                auto neighborhood = estimatePointNeighborhood(vector_neighbors, location /*raw_point*/, weight);
 
+               // weight = (其余特征值之差) / 最大特征值的 平方 ， 如果是理想平面，则是1, 非平面接近于0
+               // kMaxPointToPlane: 0.3
+               // min_number_neighbors: 20
+               // lambda_weight: 0.9
+               // lambda_neighborhood: 0.1
                weight = lambda_weight * weight + lambda_neighborhood *
-                                                     std::exp(-(vector_neighbors[0] -
-                                                                keypoint.point)
-                                                                   .norm() /
-                                                              (kMaxPointToPlane *
-                                                               options_.min_number_neighbors));
+                                                     std::exp( -(vector_neighbors[0] -  keypoint.point).norm() 
+                                                                 /  (kMaxPointToPlane * options_.min_number_neighbors));
 
                double point_to_plane_dist;
                std::set<voxel> neighbor_voxels;
+               // num_closest_neighbors: 1
                for (int i(0); i < options_.num_closest_neighbors; ++i)
                {
                     point_to_plane_dist = std::abs((keypoint.point - vector_neighbors[i]).transpose() * neighborhood.normal);
 
+                    // max_dist_to_plane_icp: 0.3
                     if (point_to_plane_dist < options_.max_dist_to_plane_icp)
                     {
 
@@ -716,7 +733,7 @@ namespace zjloc
 
                          normals.push_back(norm_vector); //   record normal
 
-                         double norm_offset = -norm_vector.dot(vector_neighbors[i]);
+                         double norm_offset = -norm_vector.dot(vector_neighbors[i]); // 最近点在平面上的差异
 
                          switch (options_.icpmodel)
                          {
@@ -738,6 +755,7 @@ namespace zjloc
                          }
                          case IcpModel::POINT_TO_PLANE:
                          {
+                              // 当前帧扫描结束时刻， imu到keypoints向量在imu系下得投影
                               Eigen::Vector3d point_end = p_frame->p_state->rotation.inverse() * keypoints[k].point -
                                                           p_frame->p_state->rotation.inverse() * p_frame->p_state->translation;
 #ifdef USE_ANALYTICAL_DERIVATE
@@ -754,7 +772,7 @@ namespace zjloc
                          }
                     }
                }
-
+               // max_num_residuals: 2000
                if (num_residuals >= options_.max_num_residuals)
                     break;
           }
@@ -789,7 +807,9 @@ namespace zjloc
 
           priority_queue_t priority_queue;
 
+          // 当前点所在的voxel
           voxel voxel_temp(kx, ky, kz);
+          // 搜索当前voxel位置，上下各nb_voxels_visited 位置的voxel
           for (short kxx = kx - nb_voxels_visited; kxx < kx + nb_voxels_visited + 1; ++kxx)
           {
                for (short kyy = ky - nb_voxels_visited; kyy < ky + nb_voxels_visited + 1; ++kyy)
@@ -800,12 +820,14 @@ namespace zjloc
                          voxel_temp.y = kyy;
                          voxel_temp.z = kzz;
 
+                         // search为当前待查找voxel
                          auto search = map.find(voxel_temp);
                          if (search != map.end())
                          {
                               const auto &voxel_block = search.value();
                               if (voxel_block.NumPoints() < threshold_voxel_capacity)
                                    continue;
+                              // 遍历待查找的所有点
                               for (int i(0); i < voxel_block.NumPoints(); ++i)
                               {
                                    auto &neighbor = voxel_block.points[i];

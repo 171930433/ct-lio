@@ -125,10 +125,20 @@ namespace zjloc
           double checkLocalizability(std::vector<Eigen::Vector3d> planeNormals);
 
           // search neighbors
+          /**
+           * 根据查找到的最近点，计算点集的特征值和特征向量
+          */
           Neighborhood computeNeighborhoodDistribution(
               const std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> &points);
 
           std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>>
+          /**
+           * 返回值: 最邻近的max_num_neighbors个点
+           * nb_voxels_visited 查找相邻几个voxel
+           * max_num_neighbors
+           * threshold_voxel_capacity: 待查找的voxel至少有几个点在里面
+           * voxels: 最邻近的max_num_neighbors 所在的几个voxel
+          */
           searchNeighbors(const voxelHashMap &map, const Eigen::Vector3d &point,
                           int nb_voxels_visited, double size_voxel_map, int max_num_neighbors,
                           int threshold_voxel_capacity = 1, std::vector<voxel> *voxels = nullptr);
