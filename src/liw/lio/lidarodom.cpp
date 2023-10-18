@@ -232,7 +232,7 @@ namespace zjloc
           const_surf.insert(const_surf.end(), meas.lidar_.begin(), meas.lidar_.end());
           // const_surf.assign(meas.lidar_.begin(), meas.lidar_.end());
 
-          //! 构建p_frame 数据帧，将局部点点，经过运动补偿，alpha补偿，转换到world系
+          //! 构建p_frame 数据帧，将局部点点，经过运动补偿,转换到world系
           cloudFrame *p_frame;
           zjloc::common::Timer::Evaluate([&]()
                                          { p_frame = buildFrame(const_surf, current_state,
